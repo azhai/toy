@@ -8,11 +8,12 @@ import (
 )
 
 var (
-	rootModule      = llvm.NewModule("root")
+	ctx             = llvm.NewContext()
+	builder         = ctx.NewBuilder()
+	rootModule      = ctx.NewModule("root")
 	rootFuncPassMgr = llvm.NewFunctionPassManagerForModule(rootModule)
-	builder         = llvm.NewBuilder()
-	namedVals       = map[string]llvm.Value{}
 	options         = llvm.NewMCJITCompilerOptions()
+	namedVals       = map[string]llvm.Value{}
 	execEngine      llvm.ExecutionEngine
 	machine         llvm.TargetMachine
 )
@@ -87,7 +88,7 @@ func Optimize() {
 func createEntryBlockAlloca(f llvm.Value, name string) llvm.Value {
 	var tmpB = llvm.NewBuilder()
 	tmpB.SetInsertPoint(f.EntryBasicBlock(), f.EntryBasicBlock().FirstInstruction())
-	return tmpB.CreateAlloca(llvm.DoubleType(), name)
+	return tmpB.CreateAlloca(ctx.DoubleType(), name)
 }
 
 func (n *fnPrototypeNode) createArgAlloca(f llvm.Value) {
@@ -100,7 +101,7 @@ func (n *fnPrototypeNode) createArgAlloca(f llvm.Value) {
 }
 
 func (n *numberNode) codegen() llvm.Value {
-	return llvm.ConstFloat(llvm.DoubleType(), n.val)
+	return llvm.ConstFloat(ctx.DoubleType(), n.val)
 }
 
 func (n *variableNode) codegen() llvm.Value {
@@ -108,7 +109,7 @@ func (n *variableNode) codegen() llvm.Value {
 	if v.IsNil() {
 		return ErrorV("unknown variable name")
 	}
-	return builder.CreateLoad(llvm.DoubleType(), v, n.name)
+	return builder.CreateLoad(ctx.DoubleType(), v, n.name)
 }
 
 func (n *ifNode) codegen() llvm.Value {
@@ -116,7 +117,7 @@ func (n *ifNode) codegen() llvm.Value {
 	if ifv.IsNil() {
 		return ErrorV("code generation failed for if expression")
 	}
-	ifv = builder.CreateFCmp(llvm.FloatONE, ifv, llvm.ConstFloat(llvm.DoubleType(), 0), "ifcond")
+	ifv = builder.CreateFCmp(llvm.FloatONE, ifv, llvm.ConstFloat(ctx.DoubleType(), 0), "ifcond")
 
 	parentFunc := builder.GetInsertBlock().Parent()
 	thenBlk := llvm.AddBasicBlock(parentFunc, "then")
@@ -145,7 +146,7 @@ func (n *ifNode) codegen() llvm.Value {
 	elseBlk = builder.GetInsertBlock()
 
 	builder.SetInsertPointAtEnd(mergeBlk)
-	PhiNode := builder.CreatePHI(llvm.DoubleType(), "iftmp")
+	PhiNode := builder.CreatePHI(ctx.DoubleType(), "iftmp")
 	PhiNode.AddIncoming([]llvm.Value{thenv}, []llvm.BasicBlock{thenBlk})
 	PhiNode.AddIncoming([]llvm.Value{elsev}, []llvm.BasicBlock{elseBlk})
 	return PhiNode
@@ -178,10 +179,10 @@ func (n *forNode) codegen() llvm.Value {
 	if n.step != nil {
 		stepVal = n.step.codegen()
 		if stepVal.IsNil() {
-			return llvm.ConstNull(llvm.DoubleType())
+			return llvm.ConstNull(ctx.DoubleType())
 		}
 	} else {
-		stepVal = llvm.ConstFloat(llvm.DoubleType(), 1)
+		stepVal = llvm.ConstFloat(ctx.DoubleType(), 1)
 	}
 
 	// evaluate end condition before increment
@@ -190,11 +191,11 @@ func (n *forNode) codegen() llvm.Value {
 		return endVal
 	}
 
-	curVar := builder.CreateLoad(llvm.DoubleType(), alloca, n.counter)
+	curVar := builder.CreateLoad(ctx.DoubleType(), alloca, n.counter)
 	nextVar := builder.CreateFAdd(curVar, stepVal, "nextvar")
 	builder.CreateStore(nextVar, alloca)
 
-	endVal = builder.CreateFCmp(llvm.FloatONE, endVal, llvm.ConstFloat(llvm.DoubleType(), 0), "loopcond")
+	endVal = builder.CreateFCmp(llvm.FloatONE, endVal, llvm.ConstFloat(ctx.DoubleType(), 0), "loopcond")
 	afterBlk := llvm.AddBasicBlock(parentFunc, "afterloop")
 
 	builder.CreateCondBr(endVal, loopBlk, afterBlk)
@@ -207,7 +208,7 @@ func (n *forNode) codegen() llvm.Value {
 		delete(namedVals, n.counter)
 	}
 
-	return llvm.ConstFloat(llvm.DoubleType(), 0)
+	return llvm.ConstFloat(ctx.DoubleType(), 0)
 }
 
 func (n *unaryNode) codegen() llvm.Value {
@@ -220,7 +221,7 @@ func (n *unaryNode) codegen() llvm.Value {
 	if f.IsNil() {
 		return ErrorV("unknown unary operator")
 	}
-	ftyp := llvm.FunctionType(llvm.DoubleType(), []llvm.Type{llvm.DoubleType()}, false)
+	ftyp := llvm.FunctionType(ctx.DoubleType(), []llvm.Type{ctx.DoubleType()}, false)
 	return builder.CreateCall(ftyp, f, []llvm.Value{operandValue}, "unop")
 }
 
@@ -239,7 +240,7 @@ func (n *variableExprNode) codegen() llvm.Value {
 				return val // nil
 			}
 		} else { // if no initialized value set to 0
-			val = llvm.ConstFloat(llvm.DoubleType(), 0)
+			val = llvm.ConstFloat(ctx.DoubleType(), 0)
 		}
 
 		alloca := createEntryBlockAlloca(f, name)
@@ -276,13 +277,13 @@ func (n *fnCallNode) codegen() llvm.Value {
 	args, argtyps := []llvm.Value{}, []llvm.Type{}
 	for _, arg := range n.args {
 		args = append(args, arg.codegen())
-		argtyps = append(argtyps, llvm.DoubleType())
+		argtyps = append(argtyps, ctx.DoubleType())
 		if args[len(args)-1].IsNil() {
 			return ErrorV("an argument was nil")
 		}
 	}
 
-	ftyp := llvm.FunctionType(llvm.DoubleType(), argtyps, false)
+	ftyp := llvm.FunctionType(ctx.DoubleType(), argtyps, false)
 	return builder.CreateCall(ftyp, callee, args, "calltmp")
 }
 
@@ -326,13 +327,13 @@ func (n *binaryNode) codegen() llvm.Value {
 		return builder.CreateFDiv(l, r, "divtmp")
 	case "<":
 		l = builder.CreateFCmp(llvm.FloatOLT, l, r, "cmptmp")
-		return builder.CreateUIToFP(l, llvm.DoubleType(), "booltmp")
+		return builder.CreateUIToFP(l, ctx.DoubleType(), "booltmp")
 	default:
 		function := rootModule.NamedFunction("binary" + string(n.op))
 		if function.IsNil() {
 			return ErrorV("invalid binary operator")
 		}
-		ftyp := llvm.FunctionType(llvm.DoubleType(), []llvm.Type{llvm.DoubleType(), llvm.DoubleType()}, false)
+		ftyp := llvm.FunctionType(ctx.DoubleType(), []llvm.Type{ctx.DoubleType(), ctx.DoubleType()}, false)
 		return builder.CreateCall(ftyp, function, []llvm.Value{l, r}, "binop")
 	}
 }
@@ -340,9 +341,9 @@ func (n *binaryNode) codegen() llvm.Value {
 func (n *fnPrototypeNode) codegen() llvm.Value {
 	funcArgs := []llvm.Type{}
 	for range n.args {
-		funcArgs = append(funcArgs, llvm.DoubleType())
+		funcArgs = append(funcArgs, ctx.DoubleType())
 	}
-	funcType := llvm.FunctionType(llvm.DoubleType(), funcArgs, false)
+	funcType := llvm.FunctionType(ctx.DoubleType(), funcArgs, false)
 	function := llvm.AddFunction(rootModule, n.name, funcType)
 
 	if function.Name() != n.name {
